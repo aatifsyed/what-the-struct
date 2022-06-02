@@ -715,9 +715,9 @@ checksum = "d4fd5641d01c8f18a23da7b6fe29298ff4b55afcccdf78973b24cf3175fee32e"
 
 [[package]]
 name = "petgraph"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51b305cc4569dd4e8765bab46261f67ef5d4d11a4b6e745100ee5dad8948b46c"
+checksum = "e6d5014253a1331579ce62aa67443b4a658c5e7dd03d4bc6d302b94474888143"
 dependencies = [
  "fixedbitset",
  "indexmap",
@@ -1173,6 +1173,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sprawl"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36e9659665a3e9f244e0d5d64879173e510a7aa4070fe4e0d3a4d5cc6a3478a9"
+dependencies = [
+ "async-recursion",
+ "futures",
+ "petgraph",
+ "reqwest",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "string_cache"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1590,6 +1605,7 @@ dependencies = [
  "petgraph",
  "reqwest",
  "soup",
+ "sprawl",
  "tokio",
  "tracing",
  "tracing-subscriber",
