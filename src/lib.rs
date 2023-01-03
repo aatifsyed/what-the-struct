@@ -1,4 +1,31 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
+
+use color_eyre::{eyre::Context as _, Help as _};
+use tap::Pipe as _;
+
+/// Build and parse rustdoc json for the given crate.
+#[tracing::instrument(err)]
+pub fn rustdoc(toolchain: &str, manifest_path: &Path) -> color_eyre::Result<rustdoc_types::Crate> {
+    let rustdoc_json_path = tracing::info_span!("build").in_scope(|| {
+        rustdoc_json::Builder::default()
+            .toolchain(String::from(toolchain))
+            .document_private_items(true)
+            .manifest_path(manifest_path)
+            .quiet(true)
+            .build()
+            .wrap_err("couldn't get rustdoc json")
+            .suggestion("install the nightly toolchain with `rustup toolchain add nightly`")
+    })?;
+
+    tracing::info_span!("parse", ?rustdoc_json_path).in_scope(|| {
+        std::fs::read_to_string(&rustdoc_json_path)
+            .wrap_err("couldn't read rustdoc json file")?
+            .pipe_as_ref(serde_json::Deserializer::from_str)
+            .pipe_ref_mut(serde_path_to_error::deserialize::<_, rustdoc_types::Crate>)
+            .wrap_err("couldn't parse rustdoc json")?
+            .pipe(Ok)
+    })
+}
 
 /// # Panics
 /// If `id` point does not refer to a struct, enum or union

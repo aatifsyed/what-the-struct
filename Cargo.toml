@@ -32,8 +32,5 @@ tracing-error = { version = "0.2.0", features = ["traced-error"] }
 tracing-subscriber = { version = "0.3.11", features = ["fmt", "env-filter"] }
 url = "2.2.2"
 
-[[example]]
-name = "foo"
-path = "examples/foo/src/lib.rs"
-crate-type = ["lib"]
-test = true
+[dev-dependencies]
+itertools = "0.10.5"

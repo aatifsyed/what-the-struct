@@ -1,13 +1,8 @@
 use std::path::PathBuf;
 
 use clap::Parser as _;
-use color_eyre::{
-    eyre::{bail, ensure, Context as _},
-    Help as _,
-};
-use tap::Pipe as _;
+use color_eyre::eyre::{bail, ensure, Context as _};
 use tracing::debug;
-use tracing_subscriber::{layer::SubscriberExt as _, Layer as _};
 
 #[derive(Debug, clap::Parser)]
 struct Args {
@@ -26,27 +21,7 @@ fn main() -> color_eyre::Result<()> {
 
     let args = Args::parse();
     debug!(?args);
-
-    let rustdoc_json_path = tracing::info_span!("build_json").in_scope(|| {
-        rustdoc_json::Builder::default()
-            .toolchain(args.toolchain)
-            .document_private_items(true)
-            .manifest_path(args.manifest_path)
-            .quiet(true)
-            .build()
-            .wrap_err("couldn't get rustdoc json")
-            .suggestion("install the nightly toolchain with `rustup toolchain add nightly`")
-    })?;
-
-    let user_krate =
-        tracing::info_span!("parse_rustdoc_json", ?rustdoc_json_path).in_scope(|| {
-            std::fs::read_to_string(&rustdoc_json_path)
-                .wrap_err("couldn't read rustdoc json file")?
-                .pipe_as_ref(serde_json::Deserializer::from_str)
-                .pipe_ref_mut(serde_path_to_error::deserialize::<_, rustdoc_types::Crate>)
-                .wrap_err("couldn't parse rustdoc json")?
-                .pipe(color_eyre::Result::<rustdoc_types::Crate>::Ok)
-        })?;
+    let user_krate = what_the_struct::rustdoc(&args.toolchain, &args.manifest_path)?;
 
     let needle = args.item.split("::").collect::<Vec<_>>();
     let Some((root_id, root_summary)) = user_krate
@@ -77,6 +52,8 @@ fn main() -> color_eyre::Result<()> {
 }
 
 fn setup_tracing() -> color_eyre::Result<()> {
+    use tracing_subscriber::{layer::SubscriberExt as _, Layer as _};
+
     tracing::subscriber::set_global_default(
         tracing_subscriber::registry()
             // always capture spantrace fields for attaching to errors
