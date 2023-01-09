@@ -48,6 +48,10 @@ fn main() -> color_eyre::Result<()> {
         println!("\t{}", child.join("::"))
     }
 
+    let graph = what_the_struct::build_type_graph(&user_krate);
+
+    println!("{:?}", petgraph::dot::Dot::new(&graph));
+
     Ok(())
 }
 

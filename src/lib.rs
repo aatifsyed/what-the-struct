@@ -1,10 +1,11 @@
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, fmt, path::Path};
 
 use color_eyre::{eyre::Context as _, Help as _};
 use tap::Pipe as _;
 
 /// Build and parse rustdoc json for the given crate.
-#[tracing::instrument(err)]
+// TODO(build with the correct features etc)
+#[tracing::instrument(skip(toolchain), err)]
 pub fn rustdoc(toolchain: &str, manifest_path: &Path) -> color_eyre::Result<rustdoc_types::Crate> {
     let rustdoc_json_path = tracing::info_span!("build").in_scope(|| {
         rustdoc_json::Builder::default()
@@ -27,6 +28,90 @@ pub fn rustdoc(toolchain: &str, manifest_path: &Path) -> color_eyre::Result<rust
     })
 }
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct StructyPath<'a>(pub &'a Vec<String>);
+
+impl PartialEq<[&str]> for StructyPath<'_> {
+    fn eq(&self, other: &[&str]) -> bool {
+        self.0 == other
+    }
+}
+
+impl fmt::Display for StructyPath<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0.join("::"))
+    }
+}
+
+pub fn build_type_graph(
+    krate: &rustdoc_types::Crate,
+) -> petgraph::graphmap::DiGraphMap<StructyPath, ()> {
+    let edges = krate
+        .paths
+        .iter()
+        .flat_map(|(id, summary)| {
+            use rustdoc_types::ItemKind::{Enum, Struct, Union};
+            match summary.kind {
+                Enum | Union | Struct => Some((id, StructyPath(&summary.path))),
+                _ => None,
+            }
+        })
+        .map(|(parent_id, parent)| {
+            use rustdoc_types::{ItemEnum, Struct, StructKind, Variant};
+            let children = match &krate.index.get(parent_id).map(|it| &it.inner) {
+                Some(ItemEnum::Enum(enum_)) => enum_
+                    .variants
+                    .iter()
+                    .map(|id| match &krate.index[id].inner {
+                        ItemEnum::Variant(Variant::Plain(_)) => vec![], // no children from this variant
+                        ItemEnum::Variant(Variant::Tuple(fields)) => fields
+                            .iter()
+                            .flat_map(|maybe_id| maybe_id)
+                            .map(unwrap_struct_field(krate))
+                            .collect(),
+                        ItemEnum::Variant(Variant::Struct { fields, .. }) => {
+                            fields.iter().map(unwrap_struct_field(krate)).collect()
+                        }
+                        other => panic!("expected `Variant`, not {other:?}"),
+                    })
+                    .flatten()
+                    .collect(),
+                Some(ItemEnum::Struct(Struct {
+                    kind: StructKind::Unit,
+                    ..
+                })) => vec![], // no fields in this struct
+                Some(ItemEnum::Struct(Struct {
+                    kind: StructKind::Plain { fields, .. },
+                    ..
+                })) => fields.iter().map(unwrap_struct_field(krate)).collect(),
+                Some(ItemEnum::Struct(Struct {
+                    kind: StructKind::Tuple(fields),
+                    ..
+                })) => fields
+                    .iter()
+                    .flat_map(|maybe_id| maybe_id)
+                    .map(unwrap_struct_field(krate))
+                    .collect(),
+                Some(ItemEnum::Union(union)) => union
+                    .fields
+                    .iter()
+                    .map(unwrap_struct_field(krate))
+                    .collect(),
+                Some(other) => panic!("expected `Enum | Struct | Union`, not `{other:?}`"),
+                None => vec![],
+            };
+            let edges_of_parent = children
+                .into_iter()
+                .flat_map(|type_| get_resolved_paths(krate, type_))
+                .map(|child| (parent, child))
+                .collect::<Vec<_>>();
+            edges_of_parent
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    petgraph::graphmap::DiGraphMap::<_, ()>::from_edges(edges)
+}
+
 /// # Panics
 /// If `id` point does not refer to a struct, enum or union
 pub fn struct_parent_and_children<'a>(
@@ -41,10 +126,13 @@ pub fn struct_parent_and_children<'a>(
         other => panic!("Expected `Enum | Struct | Union`, not {other:?}"),
     };
 
+    println!("{id:?}, {parent:?}");
+
     let struct_fields: Vec<&rustdoc_types::Type> = match &krate.index[id].inner {
         ItemEnum::Enum(enum_) => enum_
             .variants
             .iter()
+            .inspect(|it| println!("{it:?}"))
             .map(|id| match &krate.index[id].inner {
                 ItemEnum::Variant(Variant::Plain(_)) => vec![], // no children from this variant
                 ItemEnum::Variant(Variant::Tuple(fields)) => fields
@@ -86,6 +174,7 @@ pub fn struct_parent_and_children<'a>(
     let struct_fields = struct_fields
         .into_iter()
         .flat_map(|type_| get_resolved_paths(krate, type_))
+        .map(|i| i.0)
         .collect();
 
     (parent, struct_fields)
@@ -104,16 +193,18 @@ fn unwrap_struct_field<'a>(
 fn get_resolved_paths<'a>(
     krate: &'a rustdoc_types::Crate,
     type_: &rustdoc_types::Type,
-) -> Vec<&'a Vec<String>> {
+) -> Vec<StructyPath<'a>> {
     use rustdoc_types::Type;
 
     match type_ {
-        Type::ResolvedPath(path) => vec![&krate.paths[&path.id].path],
+        Type::ResolvedPath(path) => vec![StructyPath(&krate.paths[&path.id].path)],
         Type::DynTrait(_) => vec![],
         Type::Generic(_) => vec![],
-        Type::Primitive(primitive) => vec![INTERNED_PRIMITIVES
-            .get(primitive.as_str())
-            .expect(&format!("primitive {primitive} wasn't interned"))],
+        Type::Primitive(primitive) => vec![StructyPath(
+            INTERNED_PRIMITIVES
+                .get(primitive.as_str())
+                .expect(&format!("primitive {primitive} wasn't interned")),
+        )],
         Type::FunctionPointer(_) => vec![],
         Type::Tuple(types) => types
             .into_iter()
@@ -150,6 +241,6 @@ static INTERNED_PRIMITIVES: once_cell::sync::Lazy<HashMap<&'static str, Vec<Stri
         insert_primitive!(bool, char);
         insert_primitive!(f32, f64);
         insert_primitive!(i8, i16, i32, i64, i128, isize);
-        insert_primitive!(u8, u16, u32, u64, u128, usize,);
+        insert_primitive!(u8, u16, u32, u64, u128, usize);
         primitives
     });
